@@ -5,7 +5,7 @@
 	import Papa from 'papaparse';
 
 	// Search state
-	let activeTab: 'search' | 'similar' | 'category' = 'search';
+	let activeTab: 'search' | 'similar' | 'category' | 'profile' = 'search';
 	let loading = false;
 	let error = '';
 	let results: Creator[] = [];
@@ -16,15 +16,12 @@
 	let query = '';
 	let similarAccount = '';
 	let categoryName = '';
-	let location = '';
+	let profileUsername = '';
 	let method: 'vector' | 'text' | 'hybrid' = 'hybrid';
-	let limit = 20;
+	let limit = 1000;
 	let minFollowers = 1000;
-	let maxFollowers = 100000;
+	let maxFollowers = 100000000; // Keep ceiling high so we don't cap larger accounts
 	let minEngagement = 0.0;
-	
-	// Language Filter
-	let englishOnly: boolean | null = null;
 	
 	// LLM Score Filters
 	let minIndividualScore = 0;
@@ -68,6 +65,10 @@
 		}
 	}
 
+	function toEngagementRate(value: number): number | undefined {
+		return value > 0 ? value / 100 : undefined;
+	}
+
 	// Advanced filters toggle
 	let showAdvancedFilters = false;
 
@@ -84,6 +85,10 @@
 	});
 
 	async function handleSearch() {
+		if (activeTab === 'profile' && !profileUsername.trim()) {
+			error = 'Please enter a username';
+			return;
+		}
 		if (activeTab === 'search' && !query.trim()) {
 			error = 'Please enter a search query';
 			return;
@@ -103,26 +108,26 @@
 
 		try {
 			let response;
+			const limitValue = Math.max(1, Math.floor(limit || 1));
+			limit = limitValue;
 
 			if (activeTab === 'search') {
 				// Normalize weights before sending
 				normalizeWeights();
 				
+				const minEngagementFilter = toEngagementRate(minEngagement);
 				const request: SearchRequest = {
 					query: query.trim(),
 					method,
-					limit,
-					min_followers: minFollowers,
-					max_followers: maxFollowers,
-					min_engagement: minEngagement,
-					location: location.trim() || undefined,
-					custom_weights: {
-						keyword: keywordWeight,
-						profile: profileWeight,
-						content: contentWeight
-					},
-					// Language Filter
-					english_only: englishOnly !== null ? englishOnly : undefined,
+					limit: limitValue,
+						min_followers: minFollowers,
+						max_followers: maxFollowers,
+						min_engagement: minEngagementFilter,
+						custom_weights: {
+							keyword: keywordWeight,
+							profile: profileWeight,
+							content: contentWeight
+						},
 					// LLM Score Filters
 					min_individual_vs_org_score: minIndividualScore > 0 ? minIndividualScore : undefined,
 					max_individual_vs_org_score: maxIndividualScore < 10 ? maxIndividualScore : undefined,
@@ -141,37 +146,52 @@
 				
 				const request: SimilarSearchRequest = {
 					account: similarAccount.trim().replace('@', ''),
-					limit,
-					min_followers: minFollowers,
-					similarity_threshold: similarityThreshold,
-					use_vector_similarity: useVectorSimilarity,
+					limit: limitValue,
+						min_followers: minFollowers,
+						max_followers: maxFollowers,
+						min_engagement: toEngagementRate(minEngagement),
+						similarity_threshold: similarityThreshold,
+						use_vector_similarity: useVectorSimilarity,
 					custom_weights: useVectorSimilarity ? {
 						keyword: similarKeywordWeight,
 						profile: similarProfileWeight,
 						content: similarContentWeight
-					} : undefined
+				} : undefined
 				};
 				response = await searchApi.searchSimilar(request);
 				lastQuery = `Similar to @${similarAccount.trim()} ${useVectorSimilarity ? '(Vector)' : '(Legacy)'}`;
-			} else {
+			} else if (activeTab === 'category') {
 				const request: CategorySearchRequest = {
 					category: categoryName.trim(),
-					location: location.trim() || undefined,
-					limit,
-					min_followers: minFollowers
+					limit: limitValue,
+						min_followers: minFollowers,
+						max_followers: maxFollowers,
+					min_engagement: toEngagementRate(minEngagement)
 				};
 				response = await searchApi.searchByCategory(request);
 				lastQuery = `Category: ${categoryName.trim()}`;
+			} else {
+				const sanitizedUsername = profileUsername.trim().replace(/^@+/, '');
+				const profile = await searchApi.getCreatorByUsername(sanitizedUsername);
+				results = profile ? [profile] : [];
+				searchCount = results.length;
+				lastQuery = `Profile: @${profile.account || sanitizedUsername}`;
+				return;
 			}
 
 			results = response.results;
-			searchCount = response.count;
+			searchCount = results.length;
 		} catch (err) {
 			if (err instanceof ApiError) {
-				error = err.message;
+				if (activeTab === 'profile' && err.statusCode === 404) {
+					error = `No creator found for @${profileUsername.trim().replace(/^@+/, '')}`;
+				} else {
+					error = err.message;
+				}
 			} else {
 				error = 'Search failed. Please try again.';
 			}
+			searchCount = 0;
 			console.error('Search error:', err);
 		} finally {
 			loading = false;
@@ -337,6 +357,14 @@
 					>
 						Category
 					</button>
+					<button
+						class="py-2 px-1 border-b-2 font-medium text-xs {activeTab === 'profile' 
+							? 'border-blue-500 text-blue-600' 
+							: 'border-transparent text-gray-500 hover:text-gray-700'}"
+						onclick={() => activeTab = 'profile'}
+					>
+						Profile
+					</button>
 				</nav>
 			</div>
 
@@ -433,7 +461,7 @@
 						</p>
 					</div>
 				</div>
-			{:else}
+			{:else if activeTab === 'category'}
 				<div class="space-y-3">
 					<div>
 						<label class="block text-xs font-medium text-gray-700 mb-1">Category</label>
@@ -445,9 +473,23 @@
 						/>
 					</div>
 				</div>
+			{:else}
+				<div class="space-y-3">
+					<div>
+						<label class="block text-xs font-medium text-gray-700 mb-1">Username</label>
+						<input
+							type="text"
+							bind:value={profileUsername}
+							placeholder="e.g., creator_handle"
+							class="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+						/>
+						<p class="text-xs text-gray-500 mt-1">Enter the creator's username without the @ symbol.</p>
+					</div>
+				</div>
 			{/if}
 
-			<!-- Advanced Filters Toggle -->
+		{#if activeTab !== 'profile'}
+		<!-- Advanced Filters Toggle -->
 			<div class="mt-4">
 				<button
 					onclick={() => showAdvancedFilters = !showAdvancedFilters}
@@ -498,48 +540,18 @@
 
 					<div class="space-y-3">
 						<div>
-							<label class="block text-xs font-medium text-gray-700 mb-1">Location</label>
-							<input
-								type="text"
-								bind:value={location}
-								placeholder="e.g., New York, California"
-								class="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-							/>
-						</div>
-						<div>
-							<label class="block text-xs font-medium text-gray-700 mb-1">Results Limit</label>
-							<select bind:value={limit} class="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500">
-								<option value={10}>10</option>
-								<option value={20}>20</option>
-								<option value={50}>50</option>
-								<option value={100}>100</option>
-								<option value={200}>200</option>
-								<option value={500}>500</option>
-								<option value={1000}>1000</option>
-							</select>
-						</div>
+								<label class="block text-xs font-medium text-gray-700 mb-1">Results Limit</label>
+								<input
+									type="number"
+									bind:value={limit}
+									min="1"
+									step="1"
+									class="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+									placeholder="Enter number of results"
+								/>
+							</div>
 					</div>
 					
-					<!-- Language Filter -->
-					<div class="space-y-3">
-						<div class="border-t pt-3">
-							<label class="block text-xs font-medium text-gray-700 mb-2">🌍 Language Filter</label>
-							<div class="space-y-2">
-								<div>
-									<label class="block text-xs text-gray-600 mb-1">Profile Language</label>
-									<select 
-										bind:value={englishOnly}
-										class="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-									>
-										<option value={null}>All Languages</option>
-										<option value={true}>English Only</option>
-										<option value={false}>Non-English Only</option>
-									</select>
-								</div>
-							</div>
-						</div>
-					</div>
-
 					<!-- LLM Score Filters -->
 					<div class="space-y-3">
 						<div class="border-t pt-3">
@@ -676,12 +688,11 @@
 										>
 											Couples/Family
 										</button>
-										<button
-											onclick={() => {
-												englishOnly = null;
-												minIndividualScore = 0; maxIndividualScore = 10;
-												minGenerationalScore = 0; maxGenerationalScore = 10;
-												minProfessionalScore = 0; maxProfessionalScore = 10;
+											<button
+												onclick={() => {
+													minIndividualScore = 0; maxIndividualScore = 10;
+													minGenerationalScore = 0; maxGenerationalScore = 10;
+													minProfessionalScore = 0; maxProfessionalScore = 10;
 												minRelationshipScore = 0; maxRelationshipScore = 10;
 											}}
 											class="px-2 py-1 bg-gray-50 hover:bg-gray-100 text-gray-700 text-xs rounded border border-gray-200 transition-colors"
@@ -878,7 +889,9 @@
 				</div>
 			{/if}
 
-			<!-- Search Button -->
+		{/if}
+
+		<!-- Search Button -->
 			<div class="mt-4">
 				<button
 					onclick={handleSearch}

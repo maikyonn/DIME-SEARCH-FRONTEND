@@ -44,7 +44,6 @@ export interface SearchRequest {
 	min_followers?: number;
 	max_followers?: number;
 	min_engagement?: number;
-	location?: string;
 	category?: string;
 	keywords?: string[];
 	custom_weights?: {
@@ -52,8 +51,6 @@ export interface SearchRequest {
 		profile: number;
 		content: number;
 	};
-	// Language Filter
-	english_only?: boolean;
 	// LLM Score Filters
 	min_individual_vs_org_score?: number;
 	max_individual_vs_org_score?: number;
@@ -69,6 +66,10 @@ export interface SimilarSearchRequest {
 	account: string;
 	limit?: number;
 	min_followers?: number;
+	max_followers?: number;
+	min_engagement?: number;
+	max_engagement?: number;
+	category?: string;
 	similarity_threshold?: number;
 	use_vector_similarity?: boolean;
 	custom_weights?: {
@@ -80,9 +81,11 @@ export interface SimilarSearchRequest {
 
 export interface CategorySearchRequest {
 	category: string;
-	location?: string;
 	limit?: number;
 	min_followers?: number;
+	max_followers?: number;
+	min_engagement?: number;
+	max_engagement?: number;
 }
 
 export interface SearchResponse {
@@ -92,6 +95,11 @@ export interface SearchResponse {
 	query: string;
 	method: string;
 	error?: string;
+}
+
+export interface UsernameSearchResponse {
+	success: boolean;
+	result: Creator;
 }
 
 export class ApiError extends Error {
@@ -132,6 +140,27 @@ async function apiRequest<T>(endpoint: string, data: any): Promise<T> {
 	}
 }
 
+async function apiGet<T>(endpoint: string): Promise<T> {
+	try {
+		const response = await fetch(`${API_BASE_URL}${endpoint}`);
+		if (!response.ok) {
+			throw new ApiError(`API request failed: ${response.statusText}`, response.status);
+		}
+
+		const result = await response.json();
+		if (!result.success) {
+			throw new ApiError(result.error || 'Unknown API error');
+		}
+
+		return result;
+	} catch (error) {
+		if (error instanceof ApiError) {
+			throw error;
+		}
+		throw new ApiError(`Network error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+	}
+}
+
 export const searchApi = {
 	// Main search endpoint
 	search: async (request: SearchRequest): Promise<SearchResponse> => {
@@ -146,6 +175,18 @@ export const searchApi = {
 	// Category search
 	searchByCategory: async (request: CategorySearchRequest): Promise<SearchResponse> => {
 		return apiRequest<SearchResponse>('/search/category', request);
+	},
+
+	// Username lookup
+	getCreatorByUsername: async (username: string): Promise<Creator> => {
+		const sanitized = username.trim().replace(/^@+/, '');
+		if (!sanitized) {
+			throw new ApiError('Username is required');
+		}
+
+		const encoded = encodeURIComponent(sanitized);
+		const response = await apiGet<UsernameSearchResponse>(`/search/username/${encoded}`);
+		return response.result;
 	},
 
 	// Health check
