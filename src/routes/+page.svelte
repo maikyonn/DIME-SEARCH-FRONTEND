@@ -13,7 +13,9 @@
 	let lastQuery = '';
 
 	// Search form data
-	let query = '';
+	let vectorQuery = '';
+	let businessQuery = '';
+	let enableStreaming = true;
 	let similarAccount = '';
 	let categoryName = '';
 	let profileUsername = '';
@@ -75,6 +77,12 @@
 	// API health check
 	let apiHealthy = false;
 
+	let vectorStreamResults: Creator[] = [];
+	let brightDataRecords: any[] = [];
+	let brightDataStatus = '';
+	let profileFitProgress = { completed: 0, total: 0 };
+	let profileFitStreamResults: Creator[] = [];
+	let debugPayload: any = null;
 	onMount(async () => {
 		try {
 			const health = await searchApi.healthCheck();
@@ -89,7 +97,7 @@
 			error = 'Please enter a username';
 			return;
 		}
-		if (activeTab === 'search' && !query.trim()) {
+		if (activeTab === 'search' && !vectorQuery.trim()) {
 			error = 'Please enter a search query';
 			return;
 		}
@@ -102,9 +110,22 @@
 			return;
 		}
 
+		if (activeTab === 'search' && enableStreaming) {
+			wait runStreamingSearch();
+			return;
+		}
+
 		loading = true;
 		error = '';
 		results = [];
+		if (!enableStreaming) {
+			vectorStreamResults = [];
+			brightDataRecords = [];
+			brightDataStatus = '';
+			profileFitStreamResults = [];
+			profileFitProgress = { completed: 0, total: 0 };
+			debugPayload = null;
+		}
 
 		try {
 			let response;
@@ -117,7 +138,9 @@
 				
 				const minEngagementFilter = toEngagementRate(minEngagement);
 				const request: SearchRequest = {
-					query: query.trim(),
+					vector_query: vectorQuery.trim(),
+					business_query: businessQuery.trim() || undefined,
+					query: vectorQuery.trim(),
 					method,
 					limit: limitValue,
 						min_followers: minFollowers,
@@ -139,7 +162,7 @@
 					max_relationship_status_score: maxRelationshipScore < 10 ? maxRelationshipScore : undefined
 				};
 				response = await searchApi.search(request);
-				lastQuery = query.trim();
+				lastQuery = businessQuery.trim() ? `${vectorQuery.trim()} | Fit: ${businessQuery.trim()}` : vectorQuery.trim();
 			} else if (activeTab === 'similar') {
 				// Normalize similarity weights before sending
 				normalizeSimilarityWeights();
@@ -198,6 +221,153 @@
 		}
 	}
 
+	async function runStreamingSearch() {
+		loading = true;
+		error = '';
+		results = [];
+		vectorStreamResults = [];
+		brightDataRecords = [];
+		brightDataStatus = '';
+		profileFitStreamResults = [];
+		profileFitProgress = { completed: 0, total: 0 };
+		debugPayload = null;
+		searchCount = 0;
+
+		const limitValue = Math.max(1, Math.floor(limit || 1));
+		limit = limitValue;
+
+		normalizeWeights();
+		const minEngagementFilter = toEngagementRate(minEngagement);
+
+		const payload: SearchRequest = {
+			vector_query: vectorQuery.trim(),
+			business_query: businessQuery.trim() || undefined,
+			query: vectorQuery.trim(),
+			method,
+			limit: limitValue,
+			min_followers: minFollowers,
+			max_followers: maxFollowers,
+			min_engagement: minEngagementFilter,
+			custom_weights: {
+				keyword: keywordWeight,
+				profile: profileWeight,
+				content: contentWeight
+			},
+			business_fit_query: businessQuery.trim() || undefined,
+			min_individual_vs_org_score: minIndividualScore > 0 ? minIndividualScore : undefined,
+			max_individual_vs_org_score: maxIndividualScore < 10 ? maxIndividualScore : undefined,
+			min_generational_appeal_score: minGenerationalScore > 0 ? minGenerationalScore : undefined,
+			max_generational_appeal_score: maxGenerationalScore < 10 ? maxGenerationalScore : undefined,
+			min_professionalization_score: minProfessionalScore > 0 ? minProfessionalScore : undefined,
+			max_professionalization_score: maxProfessionalScore < 10 ? maxProfessionalScore : undefined,
+			min_relationship_status_score: minRelationshipScore > 0 ? minRelationshipScore : undefined,
+			max_relationship_status_score: maxRelationshipScore < 10 ? maxRelationshipScore : undefined
+		};
+
+		try {
+			const response = await fetch('/api/v1/search/stream', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json'
+				},
+				body: JSON.stringify(payload)
+			});
+
+			if (!response.ok || !response.body) {
+				throw new ApiError(`Stream failed: ${response.statusText}`, response.status);
+			}
+
+			const reader = response.body.getReader();
+			const decoder = new TextDecoder();
+			let buffer = '';
+
+			const processBuffer = () => {
+				let delimiter: number;
+				while ((delimiter = buffer.indexOf('\n\n')) >= 0) {
+					const chunk = buffer.slice(0, delimiter).trim();
+					buffer = buffer.slice(delimiter + 2);
+					if (chunk.startsWith('data:')) {
+						const jsonStr = chunk.slice(5).trim();
+						if (jsonStr) {
+							try {
+								handleStreamEvent(JSON.parse(jsonStr));
+							} catch (err) {
+								console.error('Stream parse error', err);
+							}
+						}
+					}
+				}
+			};
+
+			while (true) {
+				const { value, done } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+				processBuffer();
+			}
+
+			buffer += decoder.decode();
+			processBuffer();
+		} catch (err) {
+			if (err instanceof ApiError) {
+				error = err.message;
+			} else if (err instanceof Error) {
+				error = err.message;
+			} else {
+				error = 'Streaming search failed.';
+			}
+			console.error('Streaming search error:', err);
+		} finally {
+			loading = false;
+		}
+	}
+
+	function handleStreamEvent(event: { stage: string; data: any }) {
+		const { stage, data } = event;
+		switch (stage) {
+			case 'vector_results':
+				vectorStreamResults = data.results || [];
+				searchCount = data.count || 0;
+				lastQuery = businessQuery.trim() ? `${vectorQuery.trim()} | Fit: ${businessQuery.trim()}` : vectorQuery.trim();
+				break;
+			case 'brightdata_started':
+				brightDataStatus = `Refreshing ${data.count || 0} profiles with BrightData…`;
+				break;
+			case 'brightdata_results':
+				brightDataRecords = data.records || [];
+				brightDataStatus = `BrightData returned ${brightDataRecords.length} profiles`;
+				break;
+			case 'brightdata_error':
+				brightDataStatus = `BrightData error: ${data.message}`;
+				break;
+			case 'profile_fit_started':
+				profileFitProgress = { completed: 0, total: data.total || 0 };
+				profileFitStreamResults = [];
+				break;
+			case 'profile_fit_result':
+				profileFitProgress = { completed: data.index || profileFitProgress.completed, total: data.total || profileFitProgress.total };
+				if (data.result) {
+					profileFitStreamResults = [...profileFitStreamResults, data.result];
+				}
+				break;
+			case 'profile_fit_completed':
+				profileFitProgress = { completed: profileFitProgress.total, total: profileFitProgress.total };
+				break;
+			case 'done':
+				results = data.results || [];
+				searchCount = results.length;
+				debugPayload = data.debug || null;
+				loading = false;
+				break;
+			case 'error':
+				error = data.message || 'Streaming search failed.';
+				loading = false;
+				break;
+			default:
+				console.warn('Unknown stream stage', stage, data);
+		}
+	}
+
 	function formatNumber(num: number): string {
 		return new Intl.NumberFormat().format(num);
 	}
@@ -213,7 +383,7 @@
 		}, 800);
 	}
 
-	$: if (query && activeTab === 'search') {
+	$: if (!enableStreaming && vectorQuery && activeTab === 'search') {
 		debounceSearch();
 	}
 
@@ -374,7 +544,7 @@
 					<div>
 						<label class="block text-xs font-medium text-gray-700 mb-1">Search Query</label>
 						<textarea
-							bind:value={query}
+							bind:value={vectorQuery}
 							placeholder="e.g., 'fitness influencer' or 'tech content creator'"
 							rows="3"
 							class="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
@@ -385,43 +555,67 @@
 							<p class="text-xs font-medium text-gray-600 mb-2">Sample Queries:</p>
 							<div class="grid grid-cols-2 gap-1">
 								<button
-									onclick={() => query = 'fitness influencer workout content'}
+									onclick={() => vectorQuery = 'fitness influencer workout content'}
 									class="px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs rounded border border-blue-200 transition-colors"
 								>
 									Fitness
 								</button>
 								<button
-									onclick={() => query = 'beauty makeup skincare tutorials'}
+									onclick={() => vectorQuery = 'beauty makeup skincare tutorials'}
 									class="px-2 py-1 bg-pink-50 hover:bg-pink-100 text-pink-700 text-xs rounded border border-pink-200 transition-colors"
 								>
 									Beauty
 								</button>
 								<button
-									onclick={() => query = 'tech content creator gadget reviews'}
+									onclick={() => vectorQuery = 'tech content creator gadget reviews'}
 									class="px-2 py-1 bg-gray-50 hover:bg-gray-100 text-gray-700 text-xs rounded border border-gray-200 transition-colors"
 								>
 									Tech
 								</button>
 								<button
-									onclick={() => query = 'fashion style outfit trendy clothing'}
+									onclick={() => vectorQuery = 'fashion style outfit trendy clothing'}
 									class="px-2 py-1 bg-purple-50 hover:bg-purple-100 text-purple-700 text-xs rounded border border-purple-200 transition-colors"
 								>
 									Fashion
 								</button>
 								<button
-									onclick={() => query = 'food cooking recipe chef foodie'}
+									onclick={() => vectorQuery = 'food cooking recipe chef foodie'}
 									class="px-2 py-1 bg-orange-50 hover:bg-orange-100 text-orange-700 text-xs rounded border border-orange-200 transition-colors"
 								>
 									Food
 								</button>
 								<button
-									onclick={() => query = 'travel adventure explore destination'}
+									onclick={() => vectorQuery = 'travel adventure explore destination'}
 									class="px-2 py-1 bg-green-50 hover:bg-green-100 text-green-700 text-xs rounded border border-green-200 transition-colors"
 								>
 									Travel
 								</button>
 							</div>
 						</div>
+					</div>
+					<div>
+						<label class="block text-xs font-medium text-gray-700 mb-1">Business Brief (LLM fit)</label>
+						<textarea
+							bind:value={businessQuery}
+							placeholder="Describe your campaign or event to steer profile fit scoring"
+							rows="2"
+							class="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+						></textarea>
+					</div>
+					<div class="flex items-center justify-between bg-gray-50 border border-gray-200 rounded px-3 py-2">
+						<span class="text-xs font-medium text-gray-700">Stream live results</span>
+						<button
+							onclick={() => enableStreaming = !enableStreaming}
+							class="relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {enableStreaming ? 'bg-blue-600' : 'bg-gray-200'}"
+							role="switch"
+							aria-checked={enableStreaming}
+						>
+							<span class="sr-only">Enable streaming</span>
+							<span
+								aria-hidden="true"
+								class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out {enableStreaming ? 'translate-x-4' : 'translate-x-0'}"
+							></span>
+						</button>
 					</div>
 				</div>
 			{:else if activeTab === 'similar'}
@@ -920,6 +1114,61 @@
 			</div>
 		{/if}
 
+		{#if enableStreaming && (vectorStreamResults.length > 0 || brightDataStatus || profileFitStreamResults.length > 0 || loading)}
+			<div class="space-y-3 mb-3">
+				<div class="bg-white border border-blue-100 rounded p-3 shadow-sm">
+					<div class="flex items-center justify-between mb-1">
+						<h3 class="text-sm font-semibold text-blue-700">Vector Matches</h3>
+						<span class="text-xs text-blue-500">{vectorStreamResults.length} candidates</span>
+					</div>
+					{#if vectorStreamResults.length > 0}
+						<ul class="text-xs text-gray-600 space-y-1 max-h-28 overflow-y-auto pr-1">
+							{#each vectorStreamResults.slice(0, 8) as creator (creator.account)}
+								<li class="flex justify-between">
+									<span>@{creator.account}</span>
+									<span>{formatNumber(creator.followers)} followers</span>
+								</li>
+							{/each}
+						</ul>
+					{:else}
+						<p class="text-xs text-gray-500">Awaiting vector search…</p>
+					{/if}
+				</div>
+
+				{#if brightDataStatus || brightDataRecords.length > 0}
+					<div class="bg-white border border-amber-100 rounded p-3 shadow-sm">
+						<div class="flex items-center justify-between mb-1">
+							<h3 class="text-sm font-semibold text-amber-700">BrightData Refresh</h3>
+							<span class="text-xs text-amber-500">{brightDataRecords.length} profiles</span>
+						</div>
+						<p class="text-xs text-gray-600">{brightDataStatus || 'Waiting for BrightData…'}</p>
+					</div>
+				{/if}
+
+				{#if profileFitProgress.total > 0}
+					<div class="bg-white border border-purple-100 rounded p-3 shadow-sm">
+						<div class="flex items-center justify-between mb-2">
+							<h3 class="text-sm font-semibold text-purple-700">Profile Fit Scoring</h3>
+							<span class="text-xs text-purple-500">{profileFitProgress.completed}/{profileFitProgress.total}</span>
+						</div>
+						<div class="w-full bg-purple-100 rounded h-2 overflow-hidden">
+							<div class="bg-purple-500 h-2" style={`width: ${profileFitProgress.total ? (profileFitProgress.completed / profileFitProgress.total) * 100 : 0}%`}></div>
+						</div>
+						{#if profileFitStreamResults.length > 0}
+							<ul class="text-xs text-gray-600 mt-2 space-y-1 max-h-28 overflow-y-auto pr-1">
+								{#each profileFitStreamResults.slice(-8) as creator (creator.account)}
+									<li class="flex justify-between">
+										<span>@{creator.account}</span>
+										<span class="text-purple-600 font-medium">{creator.fit_score ?? '–'}</span>
+									</li>
+								{/each}
+							</ul>
+						{/if}
+					</div>
+				{/if}
+			</div>
+		{/if}
+
 		<!-- Loading State -->
 		{#if loading}
 			<div class="flex justify-center items-center h-32">
@@ -960,6 +1209,12 @@
 					<CreatorCard {creator} />
 				{/each}
 			</div>
+			{#if debugPayload}
+				<details class="mt-3 bg-gray-50 border border-gray-200 rounded p-3 text-xs text-gray-700">
+					<summary class="cursor-pointer font-medium text-gray-800">Debug payload</summary>
+					<pre class="mt-2 whitespace-pre-wrap">{JSON.stringify(debugPayload, null, 2)}</pre>
+				</details>
+			{/if}
 		{:else if !loading && searchCount === 0 && lastQuery}
 			<!-- No Results -->
 			<div class="flex flex-col items-center justify-center h-64">

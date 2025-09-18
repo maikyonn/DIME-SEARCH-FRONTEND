@@ -35,15 +35,23 @@ export interface Creator {
 	content_similarity: number;
 	vector_similarity_score: number;
 	similarity_explanation: string;
+	fit_prompt?: string;
+	fit_raw_response?: string;
 }
+
 
 export interface SearchRequest {
 	query: string;
+	vector_query?: string;
+	business_query?: string;
+	business_fit_query?: string;
 	method?: 'vector' | 'text' | 'hybrid';
 	limit?: number;
 	min_followers?: number;
 	max_followers?: number;
 	min_engagement?: number;
+	max_engagement?: number;
+	location?: string;
 	category?: string;
 	keywords?: string[];
 	custom_weights?: {
@@ -51,6 +59,13 @@ export interface SearchRequest {
 		profile: number;
 		content: number;
 	};
+	post_filter_limit?: number;
+	post_filter_concurrency?: number;
+	post_filter_max_posts?: number;
+	post_filter_model?: string;
+	post_filter_verbosity?: string;
+	post_filter_use_brightdata?: boolean;
+	return_vectors?: boolean;
 	// LLM Score Filters
 	min_individual_vs_org_score?: number;
 	max_individual_vs_org_score?: number;
@@ -60,6 +75,11 @@ export interface SearchRequest {
 	max_professionalization_score?: number;
 	min_relationship_status_score?: number;
 	max_relationship_status_score?: number;
+	// Content Stats Filters
+	min_posts_count?: number;
+	max_posts_count?: number;
+	min_following?: number;
+	max_following?: number;
 }
 
 export interface SimilarSearchRequest {
@@ -93,7 +113,9 @@ export interface SearchResponse {
 	results: Creator[];
 	count: number;
 	query: string;
+	business_query?: string;
 	method: string;
+	debug?: any;
 	error?: string;
 }
 
@@ -109,7 +131,7 @@ export class ApiError extends Error {
 	}
 }
 
-const API_BASE_URL = 'http://localhost:8000/api/v1';
+const API_BASE_URL = '/api/v1';
 
 async function apiRequest<T>(endpoint: string, data: any): Promise<T> {
 	try {
