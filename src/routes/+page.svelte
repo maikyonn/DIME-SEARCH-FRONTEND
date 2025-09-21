@@ -111,7 +111,7 @@
 		}
 
 		if (activeTab === 'search' && enableStreaming) {
-			wait runStreamingSearch();
+			await runStreamingSearch();
 			return;
 		}
 
@@ -376,10 +376,10 @@
 	let searchTimeout: ReturnType<typeof setTimeout>;
 	function debounceSearch() {
 		clearTimeout(searchTimeout);
-		searchTimeout = setTimeout(() => {
-			if (query.trim()) {
-				handleSearch();
-			}
+			searchTimeout = setTimeout(() => {
+				if (vectorQuery.trim()) {
+					handleSearch();
+				}
 		}, 800);
 	}
 
