@@ -1,8 +1,33 @@
 <script lang="ts">
 	import type { Creator } from '../api.js';
 
-	export let creator: Creator;
-	let showDetails = false;
+export let creator: Creator;
+let showDetails = false;
+let scoreMode = 'hybrid';
+let isLexicalMode = false;
+let isSemanticMode = false;
+
+$: scoreMode = creator.score_mode || 'hybrid';
+$: isLexicalMode = scoreMode === 'lexical';
+$: isSemanticMode = scoreMode === 'semantic';
+
+const DEFAULT_AVATAR = 'https://via.placeholder.com/96x96/efefef/999?text=%F0%9F%8C%9F';
+
+$: rawPlatform = (creator.platform || '').toLowerCase();
+$: inferredPlatform = rawPlatform
+	|| (creator.profile_url && creator.profile_url.toLowerCase().includes('tiktok.com') ? 'tiktok'
+	: creator.profile_url && creator.profile_url.toLowerCase().includes('instagram.com') ? 'instagram'
+	: undefined);
+$: platform = inferredPlatform;
+$: accountHandle = creator.account || creator.username || '';
+$: avatarSrc = creator.profile_image_link || creator.profile_image_url || DEFAULT_AVATAR;
+$: profileLink = creator.profile_url
+	|| (platform === 'tiktok' && accountHandle ? `https://www.tiktok.com/@${accountHandle}`
+	: accountHandle ? `https://instagram.com/${accountHandle}` : '');
+$: platformLabel = platform === 'tiktok' ? 'TikTok' : platform === 'instagram' ? 'Instagram' : null;
+$: fitScoreValue = creator.fit_score !== undefined && creator.fit_score !== null && creator.fit_score !== ''
+	? Number(creator.fit_score)
+	: null;
 
 	function getScoreColor(score: number): string {
 		// Convert 0-10 scale to 0-1 scale for color calculation
@@ -20,6 +45,16 @@
 		if (normalizedScore >= 0.6) return 'Good';
 		if (normalizedScore >= 0.4) return 'Fair';
 		return 'Poor';
+	}
+
+	function platformBadgeClasses(): string {
+		if (platform === 'tiktok') {
+			return 'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-black text-white';
+		}
+		if (platform === 'instagram') {
+			return 'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-gradient-to-r from-pink-500 to-purple-500 text-white';
+		}
+		return 'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-gray-200 text-gray-700';
 	}
 
 	// Calculate average score from the 4 available LLM scores
@@ -41,30 +76,43 @@
 <div class="bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow p-6">
 	<!-- Profile Header -->
 	<div class="flex items-start space-x-4 mb-4">
-		<img
-			src={creator.profile_image_link}
-			alt={creator.profile_name}
-			class="w-16 h-16 rounded-full object-cover"
-			loading="lazy"
-		/>
+	<img
+		src={avatarSrc}
+		alt={creator.profile_name}
+		class="w-16 h-16 rounded-full object-cover"
+		loading="lazy"
+	/>
 		<div class="flex-1 min-w-0">
-			<div class="flex items-center space-x-2">
+			<div class="flex items-center flex-wrap gap-2">
 				<h3 class="text-lg font-semibold text-gray-900 truncate">
 					{creator.profile_name}
 				</h3>
-				<a 
-					href="https://instagram.com/{creator.account}" 
-					target="_blank" 
-					rel="noopener noreferrer"
-					class="text-pink-500 hover:text-pink-600 transition-colors"
-					title="View Instagram Profile"
-				>
-					<svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-						<path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/>
-					</svg>
-				</a>
+				{#if platformLabel}
+					<span class={platformBadgeClasses()}>
+						{platformLabel}
+					</span>
+				{/if}
+				{#if profileLink}
+					<a 
+						href={profileLink}
+						target="_blank"
+						rel="noopener noreferrer"
+						class="text-pink-500 hover:text-pink-600 transition-colors {platform === 'tiktok' ? 'text-gray-900 hover:text-gray-700' : ''}"
+						aria-label={`Open ${platformLabel ?? 'creator'} profile for ${creator.profile_name}`}
+					>
+						{#if platform === 'tiktok'}
+							<svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+								<path d="M16 3.5a4.5 4.5 0 0 0 3.1 1.28V8a8.5 8.5 0 0 1-3.1-.62v5.21a5.94 5.94 0 1 1-5.94-5.94c.22 0 .44.01.65.04V9.7a2.74 2.74 0 1 0 1.37 2.38V2.5h3.92Z" />
+							</svg>
+						{:else}
+							<svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+								<path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z" />
+							</svg>
+						{/if}
+					</a>
+				{/if}
 			</div>
-			<p class="text-sm text-gray-600">@{creator.account}</p>
+			<p class="text-sm text-gray-600">@{accountHandle}</p>
 			<div class="flex items-center space-x-4 mt-2">
 				<span class="text-sm font-medium text-blue-600">
 					{creator.followers_formatted} followers
@@ -93,7 +141,7 @@
 						<div class="aspect-square rounded-md overflow-hidden bg-gray-100">
 							<img
 								src={post.image_url}
-								alt="Post by {creator.account}"
+								alt={`Post by ${accountHandle}`}
 								class="w-full h-full object-cover hover:scale-105 transition-transform cursor-pointer"
 								loading="lazy"
 							/>
@@ -150,6 +198,13 @@
 
 	<!-- Scores -->
 	<div class="space-y-3">
+		{#if fitScoreValue !== null && !Number.isNaN(fitScoreValue)}
+			<div class="flex items-center justify-between">
+				<span class="text-sm font-medium text-purple-700">Profile Fit Score</span>
+				<span class="text-sm font-semibold text-purple-700">{fitScoreValue}/10</span>
+			</div>
+		{/if}
+
 		<div class="flex items-center justify-between">
 			<span class="text-sm font-medium text-gray-700">Overall Score</span>
 			<div class="flex items-center space-x-2">
@@ -279,90 +334,98 @@
 					</div>
 				</div>
 
+				{#if creator.fit_score != null || creator.fit_rationale}
+				<div class="bg-emerald-50 border border-emerald-200 rounded p-3 text-sm text-emerald-900 space-y-1">
+					<div class="flex items-center justify-between">
+						<span class="font-semibold uppercase text-[11px]">Fit Score</span>
+						<span class="font-mono">{creator.fit_score ?? 'n/a'}</span>
+					</div>
+					{#if creator.fit_rationale}
+					<p class="text-xs leading-snug">{creator.fit_rationale}</p>
+					{/if}
+				</div>
+				{/if}
+
 				<!-- Vector Search Scores -->
 				<div>
-					<h5 class="font-semibold text-gray-800 mb-2">Text-Based Search Scores</h5>
-					<div class="space-y-2">
+					<h5 class="font-semibold text-gray-800 mb-2">Search Scores</h5>
+					<div class="space-y-1 font-mono text-sm text-right">
+						{#if creator.combined_score != null}
 						<div class="flex items-center justify-between">
-							<span class="text-gray-600">Combined Score:</span>
-							<div class="flex items-center space-x-2">
-								<div class="w-16 bg-gray-200 rounded-full h-1.5">
-									<div class="h-1.5 rounded-full bg-blue-500" style="width: {creator.combined_score * 100}%"></div>
-								</div>
-								<span class="font-mono w-12 text-right">{creator.combined_score.toFixed(3)}</span>
-							</div>
+							<span class="text-gray-600 font-sans">combined_score</span>
+							<span>{creator.combined_score}</span>
 						</div>
+						{/if}
+						{#if !isSemanticMode && creator.bm25_fts_score != null && creator.bm25_fts_score !== 0}
 						<div class="flex items-center justify-between">
-							<span class="text-gray-600">Keyword Score:</span>
-							<div class="flex items-center space-x-2">
-								<div class="w-16 bg-gray-200 rounded-full h-1.5">
-									<div class="h-1.5 rounded-full bg-green-500" style="width: {creator.keyword_score * 100}%"></div>
-								</div>
-								<span class="font-mono w-12 text-right">{creator.keyword_score.toFixed(3)}</span>
-							</div>
+							<span class="text-gray-600 font-sans">bm25_fts_score</span>
+							<span>{creator.bm25_fts_score}</span>
 						</div>
+						{/if}
+						{#if !isLexicalMode && creator.cos_sim_profile != null && creator.cos_sim_profile !== 0}
 						<div class="flex items-center justify-between">
-							<span class="text-gray-600">Profile Score:</span>
-							<div class="flex items-center space-x-2">
-								<div class="w-16 bg-gray-200 rounded-full h-1.5">
-									<div class="h-1.5 rounded-full bg-purple-500" style="width: {creator.profile_score * 100}%"></div>
-								</div>
-								<span class="font-mono w-12 text-right">{creator.profile_score.toFixed(3)}</span>
-							</div>
+							<span class="text-gray-600 font-sans">cos_sim_profile</span>
+							<span>{creator.cos_sim_profile}</span>
 						</div>
+						{/if}
+						{#if !isLexicalMode && creator.cos_sim_posts != null && creator.cos_sim_posts !== 0}
 						<div class="flex items-center justify-between">
-							<span class="text-gray-600">Content Score:</span>
-							<div class="flex items-center space-x-2">
-								<div class="w-16 bg-gray-200 rounded-full h-1.5">
-									<div class="h-1.5 rounded-full bg-orange-500" style="width: {creator.content_score * 100}%"></div>
-								</div>
-								<span class="font-mono w-12 text-right">{creator.content_score.toFixed(3)}</span>
-							</div>
+							<span class="text-gray-600 font-sans">cos_sim_posts</span>
+							<span>{creator.cos_sim_posts}</span>
 						</div>
+						{/if}
 					</div>
 				</div>
 
+				{#if isLexicalMode && (creator.profile_fts_source || creator.posts_fts_source)}
+				<div>
+					<h5 class="font-semibold text-gray-800 mb-2">Lexical Debug</h5>
+					<div class="space-y-2 text-xs font-mono bg-gray-50 border border-gray-200 rounded p-3 text-gray-700">
+						{#if creator.profile_fts_source}
+						<div>
+							<p class="uppercase tracking-wide text-[10px] text-gray-500 mb-1">profile_fts_source</p>
+							<pre class="whitespace-pre-wrap break-words">{creator.profile_fts_source}</pre>
+						</div>
+						{/if}
+						{#if creator.posts_fts_source}
+						<div>
+							<p class="uppercase tracking-wide text-[10px] text-gray-500 mb-1">posts_fts_source</p>
+							<pre class="whitespace-pre-wrap break-words">{creator.posts_fts_source}</pre>
+						</div>
+						{/if}
+					</div>
+				</div>
+				{/if}
+
 				<!-- Vector Similarity Scores (New) -->
-				{#if creator.vector_similarity_score > 0 || creator.keyword_similarity > 0 || creator.profile_similarity > 0 || creator.content_similarity > 0}
+				{#if !isLexicalMode && ((creator.vector_similarity_score ?? 0) !== 0 || (creator.keyword_similarity ?? 0) !== 0 || (creator.profile_similarity ?? 0) !== 0 || (creator.content_similarity ?? 0) !== 0)}
 				<div>
 					<h5 class="font-semibold text-gray-800 mb-2">Vector Similarity Scores</h5>
-					<div class="space-y-2">
+					<div class="space-y-1 font-mono text-sm text-right">
+						{#if creator.vector_similarity_score != null && creator.vector_similarity_score !== 0}
 						<div class="flex items-center justify-between">
-							<span class="text-gray-600">Overall Similarity:</span>
-							<div class="flex items-center space-x-2">
-								<div class="w-16 bg-gray-200 rounded-full h-1.5">
-									<div class="h-1.5 rounded-full bg-indigo-500" style="width: {creator.vector_similarity_score * 100}%"></div>
-								</div>
-								<span class="font-mono w-12 text-right">{creator.vector_similarity_score.toFixed(3)}</span>
-							</div>
+							<span class="text-gray-600 font-sans">vector_similarity_score</span>
+							<span>{creator.vector_similarity_score}</span>
 						</div>
+						{/if}
+						{#if creator.keyword_similarity != null && creator.keyword_similarity !== 0}
 						<div class="flex items-center justify-between">
-							<span class="text-gray-600">Keyword Similarity:</span>
-							<div class="flex items-center space-x-2">
-								<div class="w-16 bg-gray-200 rounded-full h-1.5">
-									<div class="h-1.5 rounded-full bg-emerald-500" style="width: {creator.keyword_similarity * 100}%"></div>
-								</div>
-								<span class="font-mono w-12 text-right">{creator.keyword_similarity.toFixed(3)}</span>
-							</div>
+							<span class="text-gray-600 font-sans">keyword_similarity</span>
+							<span>{creator.keyword_similarity}</span>
 						</div>
+						{/if}
+						{#if creator.profile_similarity != null && creator.profile_similarity !== 0}
 						<div class="flex items-center justify-between">
-							<span class="text-gray-600">Profile Similarity:</span>
-							<div class="flex items-center space-x-2">
-								<div class="w-16 bg-gray-200 rounded-full h-1.5">
-									<div class="h-1.5 rounded-full bg-violet-500" style="width: {creator.profile_similarity * 100}%"></div>
-								</div>
-								<span class="font-mono w-12 text-right">{creator.profile_similarity.toFixed(3)}</span>
-							</div>
+							<span class="text-gray-600 font-sans">profile_similarity</span>
+							<span>{creator.profile_similarity}</span>
 						</div>
+						{/if}
+						{#if creator.content_similarity != null && creator.content_similarity !== 0}
 						<div class="flex items-center justify-between">
-							<span class="text-gray-600">Content Similarity:</span>
-							<div class="flex items-center space-x-2">
-								<div class="w-16 bg-gray-200 rounded-full h-1.5">
-									<div class="h-1.5 rounded-full bg-amber-500" style="width: {creator.content_similarity * 100}%"></div>
-								</div>
-								<span class="font-mono w-12 text-right">{creator.content_similarity.toFixed(3)}</span>
-							</div>
+							<span class="text-gray-600 font-sans">content_similarity</span>
+							<span>{creator.content_similarity}</span>
 						</div>
+						{/if}
 						
 						{#if creator.similarity_explanation}
 						<div class="mt-2 p-2 bg-blue-50 rounded border-l-4 border-blue-400">
@@ -405,6 +468,7 @@
 		display: -webkit-box;
 		-webkit-line-clamp: 3;
 		-webkit-box-orient: vertical;
+		line-clamp: 3;
 		overflow: hidden;
 	}
 </style>

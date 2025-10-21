@@ -1,7 +1,12 @@
 // API types and service for DIME Search API
 export interface Creator {
 	id: number;
+	lance_db_id?: string;
 	account: string;
+	username?: string;
+	display_name?: string;
+	platform?: string;
+	platform_id?: string | number;
 	profile_name: string;
 	followers: number;
 	followers_formatted: string;
@@ -10,11 +15,13 @@ export interface Creator {
 	business_address: string | null;
 	biography: string;
 	profile_image_link: string;
+	profile_image_url?: string;
 	profile_url: string; // Instagram profile URL
 	business_email: string | null;
 	email_address: string | null;
 	posts: any[];
 	is_personal_creator: boolean;
+	is_verified?: boolean | null;
 	// Original database LLM score columns
 	individual_vs_org_score: number;
 	generational_appeal_score: number;
@@ -25,27 +32,30 @@ export interface Creator {
 	detected_language?: string;
 	language_confidence?: number;
 	// Vector search similarity scores (text-based search)
-	keyword_score: number;
-	profile_score: number;
-	content_score: number;
+	bm25_fts_score: number | null;
+	cos_sim_profile: number | null;
+	cos_sim_posts: number | null;
 	combined_score: number;
 	// Vector similarity scores (direct vector comparison)
-	keyword_similarity: number;
-	profile_similarity: number;
-	content_similarity: number;
-	vector_similarity_score: number;
+	keyword_similarity: number | null;
+	profile_similarity: number | null;
+	content_similarity: number | null;
+	vector_similarity_score: number | null;
 	similarity_explanation: string;
+	profile_fts_source?: string | null;
+	posts_fts_source?: string | null;
+	score_mode?: string;
 	fit_prompt?: string;
 	fit_raw_response?: string;
+	fit_score?: number | string | null;
+	fit_rationale?: string | null;
+	fit_error?: string | null;
 }
 
 
 export interface SearchRequest {
 	query: string;
-	vector_query?: string;
-	business_query?: string;
-	business_fit_query?: string;
-	method?: 'vector' | 'text' | 'hybrid';
+	method?: 'semantic' | 'lexical' | 'hybrid';
 	limit?: number;
 	min_followers?: number;
 	max_followers?: number;
@@ -53,33 +63,9 @@ export interface SearchRequest {
 	max_engagement?: number;
 	location?: string;
 	category?: string;
-	keywords?: string[];
-	custom_weights?: {
-		keyword: number;
-		profile: number;
-		content: number;
-	};
-	post_filter_limit?: number;
-	post_filter_concurrency?: number;
-	post_filter_max_posts?: number;
-	post_filter_model?: string;
-	post_filter_verbosity?: string;
-	post_filter_use_brightdata?: boolean;
-	return_vectors?: boolean;
-	// LLM Score Filters
-	min_individual_vs_org_score?: number;
-	max_individual_vs_org_score?: number;
-	min_generational_appeal_score?: number;
-	max_generational_appeal_score?: number;
-	min_professionalization_score?: number;
-	max_professionalization_score?: number;
-	min_relationship_status_score?: number;
-	max_relationship_status_score?: number;
-	// Content Stats Filters
-	min_posts_count?: number;
-	max_posts_count?: number;
-	min_following?: number;
-	max_following?: number;
+	is_verified?: boolean;
+	is_business_account?: boolean;
+	lexical_scope?: 'bio' | 'bio_posts';
 }
 
 export interface SimilarSearchRequest {
@@ -89,14 +75,8 @@ export interface SimilarSearchRequest {
 	max_followers?: number;
 	min_engagement?: number;
 	max_engagement?: number;
+	location?: string;
 	category?: string;
-	similarity_threshold?: number;
-	use_vector_similarity?: boolean;
-	custom_weights?: {
-		keyword: number;
-		profile: number;
-		content: number;
-	};
 }
 
 export interface CategorySearchRequest {
@@ -106,6 +86,7 @@ export interface CategorySearchRequest {
 	max_followers?: number;
 	min_engagement?: number;
 	max_engagement?: number;
+	location?: string;
 }
 
 export interface SearchResponse {
@@ -113,10 +94,27 @@ export interface SearchResponse {
 	results: Creator[];
 	count: number;
 	query: string;
-	business_query?: string;
 	method: string;
-	debug?: any;
-	error?: string;
+}
+
+export interface EvaluationRequest {
+	profiles: Creator[];
+	run_brightdata?: boolean;
+	run_llm?: boolean;
+	business_fit_query?: string;
+	max_profiles?: number;
+	max_posts?: number;
+	model?: string;
+	verbosity?: string;
+	concurrency?: number;
+}
+
+export interface EvaluationResponse {
+	success: boolean;
+	results: Creator[];
+	brightdata_results: any[];
+	profile_fit: any[];
+	count: number;
 }
 
 export interface UsernameSearchResponse {
@@ -131,7 +129,9 @@ export class ApiError extends Error {
 	}
 }
 
-const API_BASE_URL = '/api/v1';
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1').replace(/\/$/, '');
+
+export { API_BASE_URL };
 
 async function apiRequest<T>(endpoint: string, data: any): Promise<T> {
 	try {
@@ -197,6 +197,11 @@ export const searchApi = {
 	// Category search
 	searchByCategory: async (request: CategorySearchRequest): Promise<SearchResponse> => {
 		return apiRequest<SearchResponse>('/search/category', request);
+	},
+
+	// Post-search evaluation (BrightData refresh + LLM scoring)
+	evaluateProfiles: async (request: EvaluationRequest): Promise<EvaluationResponse> => {
+		return apiRequest<EvaluationResponse>('/search/evaluate', request);
 	},
 
 	// Username lookup

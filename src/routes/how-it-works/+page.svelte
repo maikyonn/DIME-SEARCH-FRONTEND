@@ -26,24 +26,22 @@
 				<h2 class="text-2xl font-bold text-gray-900 mb-4">🔍 System Overview</h2>
 				<div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
 					<p class="text-blue-800">
-						DIME uses a sophisticated <strong>multi-vector AI search system</strong> that analyzes creators across three dimensions: 
-						<strong>Keywords</strong>, <strong>Profile Information</strong>, and <strong>Content Analysis</strong>. 
-						By combining these vectors with weighted scoring, we deliver highly relevant creator matches for any campaign or business need.
+						DIME’s stack is built on the <strong>influencer_facets</strong> LanceDB table. Each creator emits two facets—<strong>profile</strong> and <strong>posts</strong>—with dense Gemma-300m embeddings and sparse TF‑IDF vectors. The web app talks directly to the same API pipeline, so every control mirrors the production scoring logic.
 					</p>
 				</div>
 
 				<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
 					<div class="bg-red-50 border border-red-200 rounded-lg p-4">
-						<h3 class="font-semibold text-red-800 mb-2">🏷️ Keyword Vector</h3>
-						<p class="text-sm text-red-700">Analyzes hashtags, niche terms, and topical keywords from creator profiles</p>
+						<h3 class="font-semibold text-red-800 mb-2">🏷️ Lexical Signals</h3>
+						<p class="text-sm text-red-700">BM25 / TF‑IDF scores over bios, keywords, and hashtags. Used when you choose the <strong>Lexical</strong> mode.</p>
 					</div>
 					<div class="bg-green-50 border border-green-200 rounded-lg p-4">
-						<h3 class="font-semibold text-green-800 mb-2">👤 Profile Vector</h3>
-						<p class="text-sm text-green-700">Processes biography, account info, and professional categorization</p>
+						<h3 class="font-semibold text-green-800 mb-2">👤 Profile Facet</h3>
+						<p class="text-sm text-green-700">Gemma-300m embeddings of display name, biography, keywords, LLM scores, and metadata.</p>
 					</div>
 					<div class="bg-purple-50 border border-purple-200 rounded-lg p-4">
-						<h3 class="font-semibold text-purple-800 mb-2">📱 Content Vector</h3>
-						<p class="text-sm text-purple-700">Analyzes post content, themes, and engagement patterns</p>
+						<h3 class="font-semibold text-purple-800 mb-2">📱 Posts Facet</h3>
+						<p class="text-sm text-purple-700">Mean-pooled Gemma embeddings across recent posts + hashtags, capturing tone and themes.</p>
 					</div>
 				</div>
 			</section>
@@ -78,9 +76,9 @@
 							<h3 class="text-lg font-semibold text-gray-900">AI Model Encoding</h3>
 						</div>
 						<div class="bg-gray-50 rounded p-4 text-sm">
-							<strong>Model:</strong> sentence-transformers/all-mpnet-base-v2 (384-dimensional vectors)<br>
-							<strong>Process:</strong> Your query is converted into a numerical vector that captures semantic meaning<br>
-							<strong>Result:</strong> Query vector [0.123, -0.456, 0.789, ...] (384 numbers representing meaning)
+							<strong>Model:</strong> <code>google/embeddinggemma-300m</code> via sentence-transformers (768-dimensional output)<br>
+							<strong>Process:</strong> Query text is tokenised and encoded into a unit-length semantic vector<br>
+							<strong>Result:</strong> 768-length float array (e.g., <code>[0.12, -0.48, …]</code>) used for the ANN lookup
 						</div>
 					</div>
 
@@ -91,14 +89,14 @@
 							<h3 class="text-lg font-semibold text-gray-900">Multi-Vector Database Search</h3>
 						</div>
 						<div class="bg-gray-50 rounded p-4 text-sm">
-							<strong>Database:</strong> LanceDB with 97,885+ creator profiles<br>
-							<strong>Three Simultaneous Searches:</strong>
+							<strong>Database:</strong> LanceDB ANN index (IVF-PQ) over <strong>influencer_facets</strong><br>
+							<strong>Queries executed:</strong>
 							<ul class="list-disc ml-6 mt-2 space-y-1">
-								<li><strong>Keyword Vector:</strong> Matches against creator hashtags and niche terms</li>
-								<li><strong>Profile Vector:</strong> Matches against biography and profile information</li>
-								<li><strong>Content Vector:</strong> Matches against post themes and content analysis</li>
+								<li><strong>Profile Facet:</strong> cosine ANN search across profile embeddings</li>
+								<li><strong>Posts Facet:</strong> cosine ANN search across pooled post embeddings</li>
+								<li><strong>Lexical (optional):</strong> BM25 text search when lexical weighting is active</li>
 							</ul>
-							<strong>Each search returns:</strong> Top results with distance scores (lower = more similar)
+							<strong>Return:</strong> Each facet yields distance scores which we normalise into similarities
 						</div>
 					</div>
 
@@ -115,7 +113,7 @@
 								<li><strong>Hybrid:</strong> Balanced weights (keyword: 0.33, profile: 0.33, content: 0.34)</li>
 								<li><strong>Vector:</strong> Custom weights from your sliders (fully customizable)</li>
 							</ul>
-							<strong>Formula:</strong> <code>combined_score = (keyword_weight × keyword_score) + (profile_weight × profile_score) + (content_weight × content_score)</code>
+							<strong>Formula:</strong> <code>combined_score = (keyword_weight × bm25_fts_score) + (profile_weight × cos_sim_profile) + (content_weight × cos_sim_posts)</code>
 						</div>
 					</div>
 
@@ -150,7 +148,7 @@
 								<li>Clean up data (remove vector arrays for performance)</li>
 								<li>Return with individual scores for transparency</li>
 							</ul>
-							<strong>You See:</strong> Ranked creators with keyword_score, profile_score, content_score, and combined_score
+							<strong>You See:</strong> Ranked creators with bm25_fts_score, cos_sim_profile, cos_sim_posts, and combined_score
 						</div>
 					</div>
 				</div>
@@ -171,8 +169,8 @@
 						<ul class="list-disc ml-6 text-sm text-gray-600 space-y-1">
 							<li>Uses balanced weights across all three vectors (33% each)</li>
 							<li>Best for most use cases and natural language queries</li>
-							<li>Balances semantic understanding with keyword matching</li>
-							<li>Allows custom weight override via sliders</li>
+							<li>Blends semantic (profile/posts) and optional lexical scoring automatically</li>
+							<li>Supports custom profile/posts weight overrides via the sliders</li>
 						</ul>
 					</div>
 
@@ -181,12 +179,12 @@
 							<span class="bg-green-500 text-white px-2 py-1 rounded text-sm font-medium mr-3">VECTOR</span>
 							<h3 class="text-lg font-semibold text-gray-900">Pure Vector Search</h3>
 						</div>
-						<p class="text-gray-600 mb-2">Uses only semantic vector matching with manual weight control</p>
+						<p class="text-gray-600 mb-2">Uses Gemma-300m embeddings exclusively (profile + posts facets)</p>
 						<ul class="list-disc ml-6 text-sm text-gray-600 space-y-1">
-							<li>Full control via weight sliders (keyword/profile/content)</li>
-							<li>Manual weight adjustment for fine-tuning</li>
+							<li>Profile/posts weights controlled entirely by the sliders (lexical weight = 0).</li>
+							<li>Best when you want to emphasise profile vs posts signal manually.</li>
 							<li>Best for precise control and experimentation</li>
-							<li>Requires understanding of what each vector type captures</li>
+							<li>Ignores lexical BM25 scores—ideal for nuanced natural-language briefs.</li>
 						</ul>
 					</div>
 
@@ -195,12 +193,12 @@
 							<span class="bg-gray-500 text-white px-2 py-1 rounded text-sm font-medium mr-3">TEXT</span>
 							<h3 class="text-lg font-semibold text-gray-900">Text Search</h3>
 						</div>
-						<p class="text-gray-600 mb-2">Traditional keyword-based text matching (legacy)</p>
+						<p class="text-gray-600 mb-2">BM25 full-text search over profile bios (no embeddings).</p>
 						<ul class="list-disc ml-6 text-sm text-gray-600 space-y-1">
-							<li>Simple keyword matching without AI understanding</li>
-							<li>Faster but less intelligent than vector methods</li>
-							<li>Limited to exact word matches</li>
-							<li>Rarely recommended for modern use cases</li>
+							<li>Matches literal tokens—fast and deterministic.</li>
+							<li>Skips BrightData + streaming; returns up to 500 bios quickly.</li>
+							<li>Best when you know exact phrases or need deterministic filtering.</li>
+							<li>Automatically disables BrightData refresh and streaming to keep things snappy.</li>
 						</ul>
 					</div>
 				</div>
